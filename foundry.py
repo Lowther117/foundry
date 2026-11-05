@@ -39,6 +39,8 @@ DEFAULTS = {
     "skip": [],                    # repo names never cloned or built
     "no_build": [],                # repo names cloned but never built
     "shortcuts": True,             # collect launchers into <root>/_Apps
+    "start_menu": True,            # Windows: also add each app to Start Menu > Programs > <start_menu_folder>
+    "start_menu_folder": "Foundry",
     "include_forks": False,
     "include_archived": False,
     "idle_minutes": 20,            # kill a build that prints nothing for this long (0 = never)
@@ -381,27 +383,50 @@ def build(name, d, logs, verbose, idle_minutes):
 
 
 # ----------------------------------------------------------------------------- shortcuts
-def make_shortcuts(root, name, arts):
+def start_menu_dir(cfg):
+    """Per-user Start Menu folder (no admin needed): Start Menu > Programs > Foundry."""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / cfg.get("start_menu_folder", "Foundry")
+
+
+def _win_shortcuts(pairs):
+    """pairs: list of (lnk_path, target_path). One PowerShell call for the lot."""
+    if not pairs:
+        return
+    lines = ["$sh = New-Object -ComObject WScript.Shell"]
+    for lnk, target in pairs:
+        lines.append("$s = $sh.CreateShortcut('%s'); $s.TargetPath = '%s'; $s.WorkingDirectory = '%s'; $s.Save()"
+                     % (str(lnk).replace("'", "''"), str(target).replace("'", "''"), str(target.parent).replace("'", "''")))
+    ps1 = Path(tempfile.gettempdir()) / "foundry-shortcuts.ps1"
+    ps1.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)])
+    try:
+        ps1.unlink()
+    except OSError:
+        pass
+
+
+def make_shortcuts(root, cfg, name, arts):
     apps = root / "_Apps"
     apps.mkdir(exist_ok=True)
-    for a in arts:
-        if IS_MAC:
+    if IS_MAC:
+        for a in arts:
             link = apps / a.name
             if link.is_symlink() or link.exists():
                 link.unlink()
             link.symlink_to(a)
-        elif IS_WIN:
-            lnk = apps / (a.stem + ".lnk")
-            ps1 = apps / ".mk.ps1"
-            ps1.write_text(
-                "$s=(New-Object -ComObject WScript.Shell).CreateShortcut(%r)\n"
-                "$s.TargetPath=%r\n$s.WorkingDirectory=%r\n$s.Save()\n"
-                % (str(lnk), str(a), str(a.parent)), encoding="utf-8")
-            run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ps1)])
-            try:
-                ps1.unlink()
-            except OSError:
-                pass
+    elif IS_WIN:
+        pairs = []
+        sm = start_menu_dir(cfg) if cfg.get("start_menu", True) else None
+        if sm:
+            sm.mkdir(parents=True, exist_ok=True)
+        for a in arts:
+            pairs.append((apps / (a.stem + ".lnk"), a))
+            if sm:
+                pairs.append((sm / (a.stem + ".lnk"), a))
+        _win_shortcuts(pairs)
 
 
 # ----------------------------------------------------------------------------- self update
@@ -508,7 +533,7 @@ def main():
             log("   built in %dm%02ds: %s" % (secs // 60, secs % 60, ", ".join(a.name for a in arts)))
             if cfg["shortcuts"]:
                 try:
-                    make_shortcuts(root, name, arts)
+                    make_shortcuts(root, cfg, name, arts)
                 except Exception as e:  # noqa: BLE001
                     log("   shortcut failed: %s" % e)
             results.append((name, "BUILT", ", ".join(a.name for a in arts)))
@@ -530,6 +555,8 @@ def main():
     failed = sum(1 for _, s, _ in results if "FAILED" in s)
     if cfg["shortcuts"] and any(s == "BUILT" for _, s, _ in results):
         log("Launchers: %s" % (root / "_Apps"))
+        if IS_WIN and cfg.get("start_menu", True) and start_menu_dir(cfg):
+            log("Start Menu: Programs > %s" % cfg.get("start_menu_folder", "Foundry"))
     log("Logs: %s" % st.logs)
     return failed
 

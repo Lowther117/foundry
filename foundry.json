@@ -6,5 +6,7 @@
   "shortcuts": true,
   "include_forks": false,
   "include_archived": false,
-  "idle_minutes": 20
+  "idle_minutes": 20,
+  "start_menu": true,
+  "start_menu_folder": "Foundry"
 }
