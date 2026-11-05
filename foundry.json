@@ -8,5 +8,7 @@
   "include_archived": false,
   "idle_minutes": 20,
   "start_menu": true,
-  "start_menu_folder": "Foundry"
-}
+  "start_menu_folder": "Foundry",
+  "applications": true,
+  "applications_dir": "~/Applications"
+}\n

@@ -24,7 +24,7 @@ Foundry downloads zipballs and tracks commits itself.
    changed, or nothing is in `dist/`, or the last build failed — runs that script, with output
    to `~/GitHub/.foundry/logs/<name>.log`.
 4. Puts a launcher for every built app in `~/GitHub/_Apps` (symlink on Mac, `.lnk` on Windows).
-   On Windows each app is also added to the Start Menu under Programs > Foundry (per-user, no admin).
+   On Mac each `.app` is also copied into `~/Applications` so it shows in Launchpad and Spotlight;\n   on Windows each app is also added to the Start Menu under Programs > Foundry (per-user, no admin).
 5. Prints a summary. Exit code = number of failures.
 
 Repos with no build script (the site, plain scripts) are still synced, just not built.
@@ -45,7 +45,7 @@ python foundry.py --idle 45        kill a build that prints nothing for 45 minut
 Pass options to the launchers the same way: `run-windows.bat --force`.
 
 `foundry.json` holds the standing settings: `owner`, `root`, `skip` (never cloned),
-`no_build` (cloned but never built), `shortcuts`, `start_menu` and `start_menu_folder` (Windows),
+`no_build` (cloned but never built), `shortcuts`, `applications` and `applications_dir` (Mac), `start_menu` and `start_menu_folder` (Windows),
 `include_forks`, `include_archived`,
 `idle_minutes` (default 20).
 Set `GITHUB_TOKEN` in the environment if you ever hit the API's 60-requests-an-hour limit

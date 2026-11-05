@@ -39,6 +39,8 @@ DEFAULTS = {
     "skip": [],                    # repo names never cloned or built
     "no_build": [],                # repo names cloned but never built
     "shortcuts": True,             # collect launchers into <root>/_Apps
+    "applications": True,          # Mac: also copy each built .app into applications_dir (Launchpad / Spotlight)
+    "applications_dir": "~/Applications",
     "start_menu": True,            # Windows: also add each app to Start Menu > Programs > <start_menu_folder>
     "start_menu_folder": "Foundry",
     "include_forks": False,
@@ -412,11 +414,25 @@ def make_shortcuts(root, cfg, name, arts):
     apps = root / "_Apps"
     apps.mkdir(exist_ok=True)
     if IS_MAC:
+        appdir = Path(os.path.expanduser(cfg.get("applications_dir", "~/Applications"))) if cfg.get("applications", True) else None
+        if appdir:
+            appdir.mkdir(parents=True, exist_ok=True)
         for a in arts:
             link = apps / a.name
             if link.is_symlink() or link.exists():
                 link.unlink()
             link.symlink_to(a)
+            if appdir:
+                # a real copy, not a symlink: Launchpad and Spotlight only list real bundles,
+                # and the copy survives the next build wiping dist/. ditto keeps the signature.
+                dest = appdir / a.name
+                if dest.is_symlink():
+                    dest.unlink()
+                elif dest.exists():
+                    shutil.rmtree(dest, ignore_errors=True)
+                p = run(["ditto", str(a), str(dest)])
+                if p.returncode != 0:
+                    shutil.copytree(a, dest, symlinks=True)
     elif IS_WIN:
         pairs = []
         sm = start_menu_dir(cfg) if cfg.get("start_menu", True) else None
@@ -557,6 +573,8 @@ def main():
         log("Launchers: %s" % (root / "_Apps"))
         if IS_WIN and cfg.get("start_menu", True) and start_menu_dir(cfg):
             log("Start Menu: Programs > %s" % cfg.get("start_menu_folder", "Foundry"))
+        if IS_MAC and cfg.get("applications", True):
+            log("Applications: %s" % cfg.get("applications_dir", "~/Applications"))
     log("Logs: %s" % st.logs)
     return failed
 
