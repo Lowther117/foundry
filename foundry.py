@@ -430,9 +430,10 @@ def make_shortcuts(root, cfg, name, arts):
                     dest.unlink()
                 elif dest.exists():
                     shutil.rmtree(dest, ignore_errors=True)
-                p = run(["ditto", str(a), str(dest)])
-                if p.returncode != 0:
-                    shutil.copytree(a, dest, symlinks=True)
+                if shutil.which("ditto") and run(["ditto", str(a), str(dest)]).returncode == 0:
+                    continue
+                shutil.rmtree(dest, ignore_errors=True)
+                shutil.copytree(a, dest, symlinks=True)
     elif IS_WIN:
         pairs = []
         sm = start_menu_dir(cfg) if cfg.get("start_menu", True) else None
