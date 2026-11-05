@@ -41,6 +41,7 @@ DEFAULTS = {
     "shortcuts": True,             # collect launchers into <root>/_Apps
     "include_forks": False,
     "include_archived": False,
+    "idle_minutes": 20,            # kill a build that prints nothing for this long (0 = never)
 }
 
 
@@ -235,27 +236,148 @@ def artifacts(d):
     return []
 
 
-def build(name, d, logs, verbose):
+def _kill_tree(proc):
+    try:
+        if IS_WIN:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            os.killpg(os.getpgid(proc.pid), 15)
+            time.sleep(3)
+            os.killpg(os.getpgid(proc.pid), 9)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        proc.kill()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+BUILD_ENV = {
+    "FOUNDRY": "1", "CI": "1",            # lets a build script skip pauses / opening the app
+    "HOMEBREW_NO_AUTO_UPDATE": "1",
+    "CRYPTEX_SKIP_BLACKHOLE": "1",        # the Cryptex build offers a system audio driver that needs a password
+}
+QUIET_ENTER_SECS = 15   # press Enter at a build that has printed nothing for this long ("Press Enter to close")
+
+
+def _run_build_windows(cmd, d, env, lf, verbose, idle_minutes):
+    import queue
+    import threading
+    proc = subprocess.Popen(cmd, cwd=str(d), env=env, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors="replace", bufsize=1)
+    q = queue.Queue()
+
+    def pump():
+        for line in proc.stdout:
+            q.put(line)
+        q.put(None)
+    threading.Thread(target=pump, daemon=True).start()
+    timed_out = False
+    while True:
+        try:
+            line = q.get(timeout=idle_minutes * 60 if idle_minutes else None)
+        except queue.Empty:
+            timed_out = True
+            lf.write("\n# foundry: no output for %d minutes - killed\n" % idle_minutes)
+            _kill_tree(proc)
+            break
+        if line is None:
+            break
+        lf.write(line)
+        if verbose:
+            sys.stdout.write("    | " + line)
+            sys.stdout.flush()
+    rc = proc.wait()
+    return (-1 if timed_out else rc), timed_out
+
+
+def _run_build_pty(cmd, d, env, lf, verbose, idle_minutes):
+    """Mac/Linux: run the script on a pseudo-terminal that Foundry controls, so
+    'read < /dev/tty' prompts ('Press Enter to close') are answered by Foundry
+    instead of waiting on the real Terminal window forever. A sudo prompt gets
+    Enter too, fails, and the script carries on or fails - it never hangs."""
+    import fcntl
+    import pty
+    import select
+    import termios
+    master, slave = pty.openpty()
+    try:
+        attrs = termios.tcgetattr(slave)
+        attrs[3] &= ~termios.ECHO            # do not echo what we type back into the log
+        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+    except Exception:  # noqa: BLE001
+        pass
+
+    def preexec():
+        os.setsid()
+        fcntl.ioctl(0, termios.TIOCSCTTY, 0)  # make our pty this session's controlling terminal (= /dev/tty)
+
+    proc = subprocess.Popen(cmd, cwd=str(d), env=env, stdin=slave, stdout=slave, stderr=slave,
+                            preexec_fn=preexec, close_fds=True)
+    os.close(slave)
+    buf = b""
+    last_out = time.time()
+    last_enter = 0.0
+    timed_out = False
+    try:
+        while True:
+            r, _, _ = select.select([master], [], [], 1.0)
+            if r:
+                try:
+                    chunk = os.read(master, 65536)
+                except OSError:
+                    chunk = b""
+                if not chunk:
+                    break
+                last_out = time.time()
+                buf += chunk
+                *lines, buf = buf.split(b"\n")
+                for raw in lines:
+                    line = raw.replace(b"\r", b"").decode("utf-8", "replace") + "\n"
+                    lf.write(line)
+                    if verbose:
+                        sys.stdout.write("    | " + line)
+                        sys.stdout.flush()
+                continue
+            if proc.poll() is not None and not buf:
+                break
+            quiet = time.time() - last_out
+            if idle_minutes and quiet > idle_minutes * 60:
+                timed_out = True
+                lf.write("\n# foundry: no output for %d minutes - killed\n" % idle_minutes)
+                _kill_tree(proc)
+                break
+            if quiet > QUIET_ENTER_SECS and time.time() - last_enter > QUIET_ENTER_SECS:
+                try:
+                    os.write(master, b"\n")       # answer "Press Enter" / any waiting read
+                except OSError:
+                    pass
+                last_enter = time.time()
+    finally:
+        if buf:
+            lf.write(buf.replace(b"\r", b"").decode("utf-8", "replace") + "\n")
+        os.close(master)
+    rc = proc.wait()
+    return (-1 if timed_out else rc), timed_out
+
+
+def build(name, d, logs, verbose, idle_minutes):
+    """Run the repo's build script and capture its output to a log."""
     script = d / BUILD_SCRIPT
     logfile = logs / ("%s.log" % name)
     cmd = ["cmd", "/c", str(script)] if IS_WIN else ["bash", str(script)]
-    env = dict(os.environ, FOUNDRY="1", CI="1")   # lets a build script skip pauses/opening the app
+    env = dict(os.environ, **BUILD_ENV)
+    env.pop("SUDO_ASKPASS", None)
     start = time.time()
     with open(logfile, "w", encoding="utf-8", errors="replace") as lf:
         lf.write("# %s  %s\n# %s\n\n" % (now(), name, " ".join(cmd)))
-        proc = subprocess.Popen(cmd, cwd=str(d), env=env, stdin=subprocess.DEVNULL,
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                text=True, errors="replace", bufsize=1)
-        for line in proc.stdout:
-            lf.write(line)
-            if verbose:
-                sys.stdout.write("    | " + line)
-                sys.stdout.flush()
-        rc = proc.wait()
+        runner = _run_build_windows if IS_WIN else _run_build_pty
+        rc, timed_out = runner(cmd, d, env, lf, verbose, idle_minutes)
         lf.write("\n# exit %d after %.0fs\n" % (rc, time.time() - start))
     arts = artifacts(d)
     ok = rc == 0 and bool(arts)
-    return ok, rc, arts, logfile, time.time() - start
+    return ok, rc, arts, logfile, time.time() - start, timed_out
 
 
 # ----------------------------------------------------------------------------- shortcuts
@@ -315,6 +437,8 @@ def main():
     ap.add_argument("--no-build", action="store_true", help="sync only")
     ap.add_argument("--list", action="store_true", help="show what would happen and exit")
     ap.add_argument("--verbose", "-v", action="store_true", help="stream build output")
+    ap.add_argument("--idle", type=int, default=cfg["idle_minutes"], metavar="MIN",
+                    help="kill a build that prints nothing for this many minutes (0 = never)")
     args = ap.parse_args()
     cfg["owner"] = args.owner
     cfg["skip"] = list(cfg["skip"]) + args.skip
@@ -376,7 +500,7 @@ def main():
             results.append((name, "built", "already built at this commit"))
             continue
         log("   building with %s ... (log: %s)" % (BUILD_SCRIPT, st.logs / (name + ".log")))
-        ok, rc, arts, logfile, secs = build(name, d, st.logs, args.verbose)
+        ok, rc, arts, logfile, secs, timed_out = build(name, d, st.logs, args.verbose, args.idle)
         s.update({"built_sha": sha, "built": now(), "build_ok": ok, "build_rc": rc,
                   "artifacts": [str(a) for a in arts], "build_seconds": round(secs)})
         st.save()
@@ -389,7 +513,12 @@ def main():
                     log("   shortcut failed: %s" % e)
             results.append((name, "BUILT", ", ".join(a.name for a in arts)))
         else:
-            why = "exit %d" % rc if rc else "finished but nothing appeared in dist/"
+            if timed_out:
+                why = "no output for %d min (waiting for a password or a dialog?) - killed" % args.idle
+            elif rc:
+                why = "exit %d" % rc
+            else:
+                why = "finished but nothing appeared in dist/"
             log("   BUILD FAILED (%s) - see %s" % (why, logfile))
             results.append((name, "BUILD FAILED", why))
 

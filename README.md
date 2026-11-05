@@ -38,22 +38,31 @@ python foundry.py --only findex    one or more repos (repeatable)
 python foundry.py --skip hayloft   leave a repo out this run (repeatable)
 python foundry.py --no-build       sync only
 python foundry.py --verbose        stream build output to the terminal too
+python foundry.py --idle 45        kill a build that prints nothing for 45 minutes (default 20, 0 = never)
 ```
 
 Pass options to the launchers the same way: `run-windows.bat --force`.
 
 `foundry.json` holds the standing settings: `owner`, `root`, `skip` (never cloned),
-`no_build` (cloned but never built), `shortcuts`, `include_forks`, `include_archived`.
+`no_build` (cloned but never built), `shortcuts`, `include_forks`, `include_archived`,
+`idle_minutes` (default 20).
 Set `GITHUB_TOKEN` in the environment if you ever hit the API's 60-requests-an-hour limit
 (a normal run uses one or two).
 
 ## For build scripts
 
-Foundry runs build scripts with stdin closed and `FOUNDRY=1` / `CI=1` in the environment,
-so a `pause` returns immediately. A script can check `%FOUNDRY%` / `$FOUNDRY` to skip opening
-the finished app. A build counts as successful only if the script exits 0 **and** something
-appears in `dist/` (`*.app` on Mac, `*.exe` at the top of `dist/` or one folder down on
-Windows).
+On Mac, Foundry runs each build script on its own pseudo-terminal that it controls. A
+"Press Enter to close" at the end of a script - even one reading from `/dev/tty` - is
+answered by Foundry after 15 quiet seconds, so builds never sit waiting on a window. A
+`sudo` or password prompt gets the same Enter, fails, and the script carries on or fails
+honestly; Foundry sets `CRYPTEX_SKIP_BLACKHOLE=1` and `HOMEBREW_NO_AUTO_UPDATE=1` so the
+known ones never come up. On Windows, scripts run with stdin closed so `pause` returns at
+once. Every script also gets `FOUNDRY=1` / `CI=1` in the environment and can check it to
+skip opening the finished app.
+
+A build counts as successful only if the script exits 0 **and** something appears in
+`dist/` (`*.app` on Mac, `*.exe` at the top of `dist/` or one folder down on Windows). A
+build that prints nothing for `idle_minutes` (default 20) is killed and reported as failed.
 
 ## State
 

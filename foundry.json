@@ -5,5 +5,6 @@
   "no_build": [],
   "shortcuts": true,
   "include_forks": false,
-  "include_archived": false
+  "include_archived": false,
+  "idle_minutes": 20
 }
