@@ -39,7 +39,7 @@ DEFAULTS = {
     "skip": [],                    # repo names never cloned or built
     "no_build": [],                # repo names cloned but never built
     "shortcuts": True,             # collect launchers into <root>/_Apps
-    "applications": True,          # Mac: also copy each built .app into applications_dir (Launchpad / Spotlight)
+    "applications": True,          # Mac: also put a Finder alias to each built .app in applications_dir (Spotlight / Finder)
     "applications_dir": "~/Applications",
     "start_menu": True,            # Windows: also add each app to Start Menu > Programs > <start_menu_folder>
     "start_menu_folder": "Foundry",
@@ -410,6 +410,25 @@ def _win_shortcuts(pairs):
         pass
 
 
+def _mac_alias(target, folder):
+    """A Finder alias (not a symlink: Finder shows those as plain files) to target, in folder,
+    named after the target. Falls back to a symlink if Finder cannot be scripted."""
+    script = ('tell application "Finder" to make new alias file at (POSIX file "%s" as alias) '
+              'to (POSIX file "%s" as alias)' % (str(folder).replace('"', '\\"'), str(target).replace('"', '\\"')))
+    r = run(["osascript", "-e", script])
+    if r.returncode == 0:
+        # Finder names it "<name> alias"; rename to the app's own name
+        made = folder / (target.name + " alias")
+        if made.exists():
+            made.rename(folder / target.name)
+        return True
+    try:
+        (folder / target.name).symlink_to(target)
+    except OSError:
+        pass
+    return False
+
+
 def make_shortcuts(root, cfg, name, arts):
     apps = root / "_Apps"
     apps.mkdir(exist_ok=True)
@@ -423,17 +442,18 @@ def make_shortcuts(root, cfg, name, arts):
                 link.unlink()
             link.symlink_to(a)
             if appdir:
-                # a real copy, not a symlink: Launchpad and Spotlight only list real bundles,
-                # and the copy survives the next build wiping dist/. ditto keeps the signature.
+                # The app itself stays where it was built (dist/ in its repo); what goes into
+                # ~/Applications is a Finder alias to it, so there is one copy to keep current.
+                # Spotlight and Finder follow aliases; Launchpad lists real bundles only, so the
+                # alias does not show there. Anything Foundry copied here before is replaced.
                 dest = appdir / a.name
                 if dest.is_symlink():
                     dest.unlink()
-                elif dest.exists():
+                elif dest.is_dir():
                     shutil.rmtree(dest, ignore_errors=True)
-                if shutil.which("ditto") and run(["ditto", str(a), str(dest)]).returncode == 0:
-                    continue
-                shutil.rmtree(dest, ignore_errors=True)
-                shutil.copytree(a, dest, symlinks=True)
+                elif dest.exists():
+                    dest.unlink()
+                _mac_alias(a, appdir)
     elif IS_WIN:
         pairs = []
         sm = start_menu_dir(cfg) if cfg.get("start_menu", True) else None

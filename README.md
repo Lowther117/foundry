@@ -24,7 +24,9 @@ Foundry downloads zipballs and tracks commits itself.
    changed, or nothing is in `dist/`, or the last build failed — runs that script, with output
    to `~/GitHub/.foundry/logs/<name>.log`.
 4. Puts a launcher for every built app in `~/GitHub/_Apps` (symlink on Mac, `.lnk` on Windows).
-   On Mac each `.app` is also copied into `~/Applications` so it shows in Launchpad and Spotlight;\n   on Windows each app is also added to the Start Menu under Programs > Foundry (per-user, no admin).
+   On Mac a Finder alias to each `.app` also goes into `~/Applications`, so Spotlight and Finder
+   find it while the app itself stays in its repo's `dist/` (one copy to keep current; Launchpad
+   lists real bundles only, so look there via Finder or Spotlight). Copies made by older Foundry are replaced;\n   on Windows each app is also added to the Start Menu under Programs > Foundry (per-user, no admin).
 5. Prints a summary. Exit code = number of failures.
 
 Repos with no build script (the site, plain scripts) are still synced, just not built.
